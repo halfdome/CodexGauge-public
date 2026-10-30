@@ -20,18 +20,29 @@ An open-source macOS menu-bar app that **monitors official announcements for ext
 - The menu shows the last reset the app detected while monitoring usage. A decrease in weekly usage to below 10% is treated as a reset; its recorded time is when the decrease is detected, which can be up to one refresh interval later. Corrections to reported usage may also trigger it.
 - Optional launch at login.
 
-## Build and test
+## Install
 
-Requires macOS 13+, Python 3, and Xcode Command Line Tools. Usage requires an existing ChatGPT sign-in and an installed official Codex helper (bundled ChatGPT/Codex app or Codex CLI).
+1. Download **CodexGauge-2.3.0-universal.zip** from the [latest release](https://github.com/halfdome/CodexGauge-public/releases/latest).
+2. Unzip the download, then drag **CodexGauge** to **Applications**. Quit any older copy first.
+3. Open CodexGauge. It appears in the menu bar. Sign in to the official ChatGPT or Codex app if needed.
+
+The download supports Apple Silicon and Intel Macs running macOS 13 or later. It is ad-hoc signed and is not notarized by Apple, so macOS will flag it as an unidentified developer app and may require you to approve opening it in Privacy & Security. Download releases only from this repository.
+
+CodexGauge reads usage through an installed official Codex helper (from the ChatGPT or Codex app, or Codex CLI). For the ChatGPT logo and detailed plan labels, install the official ChatGPT app in `/Applications`.
+
+## Build and test from source
+
+Requires macOS 13+, Python 3, and Xcode Command Line Tools.
 
 ```sh
 python3 build.py --test
-python3 build.py
+python3 build.py                  # Build for this Mac
+python3 build.py --universal      # Build for Apple Silicon and Intel
 ```
 
-The built app is `build/CodexGauge.app`. Quit any previous copy before copying it to your Applications folder and opening it. The bundle identifier remains `local.codex.usagebar` to preserve existing settings. If moving an existing installation, toggle Launch at Login off before moving and on afterward to refresh its path.
+The built app is `build/CodexGauge.app`. Its bundle identifier remains `local.codex.usagebar` to preserve existing settings. If moving an existing installation, toggle Launch at Login off before moving and on afterward to refresh its path.
 
-The build copies the ChatGPT logo from a locally installed ChatGPT app when available. Vendor logo assets and application code are not included in this repository. CodexGauge is an independent project and is not affiliated with or endorsed by OpenAI.
+CodexGauge reads the ChatGPT logo from the locally installed ChatGPT app at runtime; vendor logo assets and application code are not included in the downloadable app or this repository. CodexGauge is an independent project and is not affiliated with or endorsed by OpenAI.
 
 ## Data and limits
 

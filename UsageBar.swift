@@ -422,8 +422,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
     lazy var chatGPTLogo: NSImage? = {
-        guard let url = Bundle.main.url(forResource: "ChatGPTLogo@2x", withExtension: "png") else { return nil }
-        return NSImage(contentsOf: url)
+        if let url = Bundle.main.url(forResource: "ChatGPTLogo@2x", withExtension: "png"), let image = NSImage(contentsOf: url) { return image }
+        return NSImage(contentsOf: URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/chatgptTemplate@2x.png"))
     }()
     func usageIcon(used: Double?, stale: Bool) -> NSImage {
         fuelGaugeIcon(used: used, stale: stale, logo: chatGPTLogo)
