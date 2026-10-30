@@ -7,18 +7,12 @@ An open-source macOS menu-bar app that **monitors official announcements for ext
 </p>
 
 
+## Highlights
 
-
-- **Extra-reset monitoring:** checks configured official news sources hourly by default. When a verified future extra reset is found, the countdown includes it automatically.
-- **Next Extra Reset News:** opens the announcement for the next confirmed extra reset, even when your normal reset comes first. When no upcoming extra reset exists, it links to the last timed extra reset announcement retained by the app, if available.
-- Compact ChatGPT logo with a filled semicircular usage gauge.
-- Optional percentage remaining, reset countdown, and Codex credit balance, rotating every four seconds by default. Rotation speed is configurable; the icon stays in place.
-- Countdown uses the earlier normal reset or verified future extra automatic reset.
-- Independent official-announcement checks: 5 minutes, 15 minutes, 1 hour (default), 2 hours, 6 hours, or daily.
-- Plan heading resolved from the live account plan code and the installed ChatGPT Usage & billing page's label definitions.
-- Plan heading opens https://chatgpt.com/settings/billing?mweb_fallback=1; usage opens https://chatgpt.com/settings/usage.
-- The menu shows the last reset the app detected while monitoring usage. A decrease in weekly usage to below 10% is treated as a reset; its recorded time is when the decrease is detected, which can be up to one refresh interval later. Corrections to reported usage may also trigger it.
-- Optional launch at login.
+- **Extra reset monitoring:** discover announced extra resets and count down to the next reset, whether extra or regular.
+- **At-a-glance usage:** see your remaining allowance, reset countdown, and credit balance in the menu bar, with configurable rotation.
+- **Reset history and news:** see the last detected reset and open the relevant extra-reset announcement.
+- **Quick access:** open your plan and usage pages from the menu, and optionally launch at login.
 
 ## Install
 
@@ -48,6 +42,8 @@ The built app is `build/CodexGauge.app`. Its bundle identifier remains `local.co
 CodexGauge reads the ChatGPT logo from the locally installed ChatGPT app at runtime; vendor logo assets and application code are not included in the downloadable app or this repository. CodexGauge is an independent project and is not affiliated with or endorsed by OpenAI.
 
 ## Data and limits
+
+The app records a detected reset when weekly usage decreases to below 10%. The recorded time is when the decrease is detected, potentially up to one refresh interval later; a usage correction can also trigger it.
 
 Usage refreshes every five minutes through the official helper's read-only `account/rateLimits/read` operation. No model turns or credit purchases are requested. Settings and announcement cache stay on the Mac; the app has no dependency on a cloud scheduled task or Google Drive.
 
