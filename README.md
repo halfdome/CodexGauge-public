@@ -22,11 +22,14 @@ An open-source macOS menu-bar app that **monitors official announcements for ext
 
 ## Install
 
-1. Download **CodexGauge-2.3.0-universal.zip** from the [latest release](https://github.com/halfdome/CodexGauge-public/releases/latest).
-2. Unzip the download, then drag **CodexGauge** to **Applications**. Quit any older copy first.
-3. Open CodexGauge. It appears in the menu bar. Sign in to the official ChatGPT or Codex app if needed.
+Download the [latest release](https://github.com/halfdome/CodexGauge-public/releases/latest) and choose either option:
 
-The download supports Apple Silicon and Intel Macs running macOS 13 or later. It is ad-hoc signed and is not notarized by Apple, so macOS will flag it as an unidentified developer app and may require you to approve opening it in Privacy & Security. Download releases only from this repository.
+- **Installer:** Open `CodexGauge-2.3.0-universal.pkg` and follow the prompts to install CodexGauge in Applications. You may be asked for an administrator password.
+- **ZIP:** Unzip `CodexGauge-2.3.0-universal.zip` and drag CodexGauge to Applications.
+
+Quit any older copy first. Open CodexGauge from Applications; it appears in the menu bar. Sign in to the official ChatGPT or Codex app if needed.
+
+Both downloads support Apple Silicon and Intel Macs running macOS 13 or later. The installer is unsigned and the app is ad-hoc signed; neither is notarized by Apple. macOS may block them or require approval in Privacy & Security. Download releases only from this repository.
 
 CodexGauge reads usage through an installed official Codex helper (from the ChatGPT or Codex app, or Codex CLI). For the ChatGPT logo and detailed plan labels, install the official ChatGPT app in `/Applications`.
 
