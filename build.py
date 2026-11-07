@@ -15,7 +15,7 @@ args = parser.parse_args()
 build = root / 'build'
 build.mkdir(exist_ok=True)
 parts = ['FuelGauge.swift', 'UsagePlanLabels.swift',
-         'Announcements.swift', 'AnnouncementTests.swift', 'UsageBar.swift']
+         'Announcements.swift', 'AnnouncementTests.swift', 'UsageHistory.swift', 'UsageEvents.swift', 'UsageBar.swift']
 source = build / 'main.swift'
 source.write_text('\n'.join((root / name).read_text() for name in parts))
 
@@ -26,7 +26,7 @@ def compile_to(target, optimized):
 if args.test:
     target = build / 'CodexGaugeTests'
     compile_to(target, False)
-    for test in ['--test-display', '--test-announcements']:
+    for test in ['--test-display', '--test-announcements', '--test-history']:
         subprocess.run([str(target), test], check=True)
 else:
     with tempfile.TemporaryDirectory(prefix='codexgauge-') as temp:
@@ -49,7 +49,7 @@ else:
             compile_to(executable, True)
         info = dict(CFBundleName='CodexGauge', CFBundleDisplayName='CodexGauge',
                     CFBundleExecutable='CodexUsage', CFBundleIdentifier='local.codex.usagebar',
-                    CFBundlePackageType='APPL', CFBundleShortVersionString='2.3', CFBundleVersion='5',
+                    CFBundlePackageType='APPL', CFBundleShortVersionString='2.4', CFBundleVersion='7',
                     LSMinimumSystemVersion='13.0', LSUIElement=True, NSHighResolutionCapable=True)
         (contents / 'Info.plist').write_bytes(plistlib.dumps(info))
         subprocess.run(['codesign', '--force', '--sign', '-', str(app)], check=True)

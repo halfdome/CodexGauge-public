@@ -228,6 +228,11 @@ func fetchUsage() throws -> UsageSnapshot {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var item: NSStatusItem!
     var snapshot: UsageSnapshot?
+    let usageHistory = UsageHistory()
+    let usageEvents = UsageEvents()
+    var samplingInterrupted = true
+    var historyWindow: NSWindow?
+    var historyChart: UsageChartView?
     var lastResetDetected: Date?
     var lastExtraNews: (date: Date, url: String)?
     var failure: String?
@@ -331,6 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) { writeState("launched") }
     func start() {
+        usageEvents.record(.started)
         NSApp.setActivationPolicy(.accessory)
         // Apply the requested new default once on upgrade; later choices remain persistent.
         if !UserDefaults.standard.bool(forKey: "hourlyAnnouncementDefaultApplied") {
@@ -353,6 +359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         restartAnnouncementTimer()
         checkAnnouncementsNow()
         restartDisplayTimer()
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(willSleep), name: NSWorkspace.willSleepNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(woke), name: NSWorkspace.didWakeNotification, object: nil)
     }
     func restartDisplayTimer() {
@@ -381,7 +388,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         UserDefaults.standard.set(sender.tag, forKey: "rotationSeconds")
         restartDisplayTimer(); rebuildMenu(); writeState("rotation-selection")
     }
-    @objc func woke() { restartDisplayTimer(); refresh(); checkAnnouncementsNow() }
+    func applicationWillTerminate(_ notification: Notification) { usageEvents.record(.stopped) }
+    @objc func willSleep() {
+        samplingInterrupted = true; usageEvents.record(.sleep)
+        historyChart?.events = usageEvents.entries
+    }
+    @objc func woke() {
+        samplingInterrupted = true; usageEvents.record(.wake)
+        historyChart?.events = usageEvents.entries
+        restartDisplayTimer(); refresh(); checkAnnouncementsNow()
+    }
     @objc func refresh() {
         guard !fetching else { return }
         fetching = true
@@ -409,10 +425,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         self.lastExtraNews = (date, raw)
                     }
                     self.snapshot = value; self.failure = nil
+                    let recordedAt = Date()
+                    if self.usageHistory.record(value, now: recordedAt) {
+                        if self.samplingInterrupted { self.usageEvents.record(.resumed, now: recordedAt) }
+                        self.samplingInterrupted = false
+                    } else {
+                        self.samplingInterrupted = true; self.usageEvents.record(.recordingFailed)
+                    }
+                    self.historyChart?.points = self.usageHistory.visible(accountID: value.accountID)
                     if planChanged || self.lastAnnouncementAttempt == nil { self.checkAnnouncementsNow() }
                 case .failure(let error):
+                    self.samplingInterrupted = true
+                    let kind: UsageEvent.Kind = (error as? FetchError) == .timedOut ? .timeout : (error as? FetchError) == .unavailable ? .helperUnavailable : .refreshFailed
+                    self.usageEvents.record(kind)
                     self.failure = (error as? FetchError) == .unavailable ? "Open the ChatGPT or Codex app to install its helper." : "Couldn’t refresh. Check your connection and ChatGPT sign-in."
                 }
+                self.historyChart?.events = self.usageEvents.entries
                 self.updateTitle(); self.rebuildMenu()
                 if let data = self.snapshot, let window = data.windows.first?.1 {
                     self.summaryLabel?.stringValue = "\(window.remaining)% remaining · \(Int(window.used))% used\nUpdates every five minutes. Click the fuel gauge for details."
@@ -488,6 +516,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let failure { add(failure); if snapshot != nil { add("* Last known figures; refresh unavailable") } }
         menu.addItem(.separator())
         add(fetching ? "Refreshing…" : "Refresh Now", action: fetching ? nil : #selector(refresh))
+        add("Usage History…", action: #selector(showUsageHistory))
         add("Open Usage Dashboard", action: #selector(dashboard))
         let upcoming = extraFeed?.next()
         let news = upcoming?.sourceURL ?? lastExtraNews?.url
@@ -516,6 +545,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         add("Launch at Login", action: #selector(toggleLogin))
         menu.items.last?.state = FileManager.default.fileExists(atPath: launchURL.path) ? .on : .off
         add("Quit CodexGauge", action: #selector(quit))
+    }
+    @objc func showUsageHistory() {
+        if historyWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 780, height: 490), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
+            window.title = "CodexGauge Usage History"
+            window.minSize = NSSize(width: 620, height: 410)
+            window.isReleasedWhenClosed = false
+            let chart = UsageChartView(frame: window.contentView!.bounds)
+            chart.autoresizingMask = [.width, .height]
+            window.contentView = chart
+            window.center()
+            historyWindow = window; historyChart = chart
+        }
+        historyChart?.events = usageEvents.entries
+        historyChart?.points = usageHistory.visible(accountID: snapshot?.accountID)
+        historyWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
     @objc func openExtraReset() {
         readExtraFeed()
@@ -715,6 +761,70 @@ if CommandLine.arguments.contains("--test-display") {
     print("Passed: display rotation and earliest valid reset; completed, cancelled, past, vague, banked, and stale extra resets excluded.")
     exit(0)
 }
+if CommandLine.arguments.contains("--test-history") {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let file = directory.appendingPathComponent("history.json")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let history = UsageHistory(url: file)
+    let now = Date()
+    let sample = UsageSnapshot(windows: [("Codex", UsageWindow(used: 40, minutes: 10080, reset: nil))], plan: "pro", accountID: "a")
+    history.record(sample, now: now.addingTimeInterval(-31 * 86400))
+    history.record(sample, now: now)
+    assert(history.visible(accountID: "a", now: now).count == 1)
+    assert(history.visible(accountID: "b", now: now).isEmpty)
+    let reloaded = UsageHistory(url: file)
+    assert(reloaded.visible(accountID: "a", now: now).first?.used == 40)
+    reloaded.record(UsageSnapshot(windows: [], plan: "pro"), now: now)
+    assert(reloaded.points.count == 1)
+    let a = UsageHistoryPoint(date: now, used: 20, accountID: "a")
+    let b = UsageHistoryPoint(date: now.addingTimeInterval(300), used: 30, accountID: "a")
+    let c = UsageHistoryPoint(date: now.addingTimeInterval(3600), used: 50, accountID: "a")
+    assert(UsageChartData.reading(at: now.addingTimeInterval(100), points: [a,b,c])?.used == 20)
+    assert(UsageChartData.reading(at: now.addingTimeInterval(250), points: [a,b,c])?.used == 30)
+    assert(UsageChartData.reading(at: now.addingTimeInterval(1000), points: [a,b,c]) == nil)
+    assert(UsageChartData.reading(at: now.addingTimeInterval(-1), points: [a,b,c]) == nil)
+    assert(UsageChartData.reading(at: now.addingTimeInterval(4000), points: [a,b,c]) == nil)
+    // Even immediately next to a real endpoint, the interior of a gap is unknown.
+    assert(UsageChartData.reading(at: b.date.addingTimeInterval(0.01), points: [a,b,c]) == nil)
+    assert(UsageChartData.reading(at: c.date.addingTimeInterval(-0.01), points: [a,b,c]) == nil)
+    assert(UsageChartData.reading(at: b.date, points: [a,b,c])?.used == 30)
+    assert(UsageChartData.reading(at: c.date, points: [a,b,c])?.used == 50)
+    assert(UsageChartData.reading(at: a.date, points: [a])?.used == 20)
+    let eventURL = directory.appendingPathComponent("events.json")
+    let eventLog = UsageEvents(url: eventURL)
+    eventLog.record(.started, now: now.addingTimeInterval(-31 * 86400))
+    eventLog.record(.sleep, now: b.date.addingTimeInterval(10))
+    eventLog.record(.wake, now: c.date.addingTimeInterval(-60))
+    eventLog.record(.timeout, now: c.date.addingTimeInterval(-30))
+    eventLog.record(.resumed, now: c.date)
+    let savedEvents = UsageEvents(url: eventURL).entries
+    assert(savedEvents.count == 4)
+    let gapDetails = UsageEvents.details(at: now.addingTimeInterval(1000), points: [a,b,c], events: savedEvents)
+    assert(gapDetails.contains { $0.contains("Mac entered sleep") })
+    assert(gapDetails.contains { $0.contains("Mac woke up") })
+    assert(gapDetails.contains { $0.contains("timed out") })
+    assert(gapDetails.contains { $0.contains("Recording resumed") })
+    assert(UsageEvents.details(at: now.addingTimeInterval(1000), points: [a,b,c], events: []) == ["Reason not recorded"])
+    assert(UsageEvents.details(at: now.addingTimeInterval(1000), points: [a,b,c], events: [UsageEvent(date: c.date.addingTimeInterval(1), kind: .timeout)]) == ["Reason not recorded"])
+    let sleeping = [UsageEvent(date: a.date.addingTimeInterval(-60), kind: .sleep)]
+    assert(UsageEvents.details(at: now.addingTimeInterval(1000), points: [a,b,c], events: sleeping).contains { $0.contains("Mac entered sleep") })
+    print("Passed: history persistence, hover gaps, event persistence/retention, mixed causes, recovery and unknown past gaps.")
+    exit(0)
+}
+if let index = CommandLine.arguments.firstIndex(of: "--preview-history"), CommandLine.arguments.count > index + 1 {
+    _ = NSApplication.shared
+    let view = UsageChartView(frame: NSRect(x: 0, y: 0, width: 780, height: 490))
+    let now = Date()
+    view.points = (0...200).compactMap { index in
+        if (70...110).contains(index) { return nil }
+        return UsageHistoryPoint(date: now.addingTimeInterval(Double(index - 200) * 300), used: 20 + Double(index) * 0.2, accountID: nil)
+    }
+    view.layoutSubtreeIfNeeded()
+    let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
+    view.cacheDisplay(in: view.bounds, to: bitmap)
+    try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+    exit(0)
+}
 if CommandLine.arguments.contains("--check") {
     do {
         let snapshot = try fetchUsage()
@@ -728,4 +838,5 @@ let delegate = AppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
 delegate.start()
+if CommandLine.arguments.contains("--history") { delegate.showUsageHistory() }
 withExtendedLifetime(delegate) { app.run() }

@@ -11,6 +11,7 @@ An open-source macOS menu-bar app that **monitors official announcements for ext
 
 - **Extra reset monitoring:** discover announced extra resets and count down to the next reset, whether extra or regular.
 - **At-a-glance usage:** see your remaining allowance, reset countdown, and credit balance in the menu bar, with configurable rotation.
+- **Usage history:** explore 24-hour, 7-day, and 30-day charts, hover for readings, and distinguish missing data from recorded usage.
 - **Reset history and news:** see the last detected reset and open the relevant extra-reset announcement.
 - **Quick access:** open your plan and usage pages from the menu, and optionally launch at login.
 
@@ -18,8 +19,8 @@ An open-source macOS menu-bar app that **monitors official announcements for ext
 
 Download the [latest release](https://github.com/halfdome/CodexGauge-public/releases/latest) and choose either option:
 
-- **Installer:** Open `CodexGauge-2.3.0-universal.pkg` and follow the prompts to install CodexGauge in Applications. You may be asked for an administrator password.
-- **ZIP:** Unzip `CodexGauge-2.3.0-universal.zip` and drag CodexGauge to Applications.
+- **Installer:** Open `CodexGauge-2.4.0-universal.pkg` and follow the prompts to install CodexGauge in Applications. You may be asked for an administrator password.
+- **ZIP:** Unzip `CodexGauge-2.4.0-universal.zip` and drag CodexGauge to Applications.
 
 Quit any older copy first. Open CodexGauge from Applications; it appears in the menu bar. Sign in to the official ChatGPT or Codex app if needed.
 
@@ -45,15 +46,17 @@ CodexGauge reads the ChatGPT logo from the locally installed ChatGPT app at runt
 
 The app records a detected reset when weekly usage decreases to below 10%. The recorded time is when the decrease is detected, potentially up to one refresh interval later; a usage correction can also trigger it.
 
-Usage refreshes every five minutes through the official helper's read-only `account/rateLimits/read` operation. No model turns or credit purchases are requested. Settings and announcement cache stay on the Mac; the app has no dependency on a cloud scheduled task or Google Drive.
+Usage refreshes every five minutes through the official helper's read-only `account/rateLimits/read` operation. No model turns or credit purchases are requested. Settings, announcement cache, and the last 30 days of usage readings and availability events stay on the Mac; the app has no dependency on a cloud scheduled task or Google Drive.
 
 Default announcement sources include OpenAI News RSS, the Codex changelog RSS, and a third-party public RSS mirror of Tibo’s X account (@thsottiaux). The mirror discovers candidate posts; the app checks their original content using X’s public embed service before using them for a countdown. No user X login is required. The mirror can be stale, incomplete, or unavailable; X embed responses can also be delayed or truncated. The parser requires an explicit future time, date/year, timezone, and eligible automatic reset announcement. It rejects vague announcements, banked-reset claim deadlines, completed resets, and unsupported eligibility conditions. Coverage is limited to configured accessible sources: X-only announcements may still be missed. Failed checks preserve previous valid data, which expires after 48 hours without verification.
+
+History starts collecting when this version runs; it cannot recover earlier readings. Grey chart segments mark gaps between recorded samples. Hovering shows recorded sleep, wake, startup, or refresh events when available; older gaps without events show “Reason not recorded.”
 
 Plan labels are read as data from the installed ChatGPT app without executing its JavaScript. Changes to its packaging or the helper protocol may require an update; a generic account-plan label is used when the richer label is unavailable.
 
 ## Source
 
-The Swift files contain the Cocoa app, gauge rendering, plan labels, and announcement checker. `AnnouncementTests.swift` contains parser checks; display/countdown checks are also available in the app's test entry points. Build products, credentials, local usage caches, and extracted vendor resources are excluded.
+The Swift files contain the Cocoa app, gauge rendering, plan labels, announcement checker, and usage history with local event recording. `AnnouncementTests.swift` contains parser checks; display/countdown checks are also available in the app's test entry points. Build products, credentials, local usage caches, and extracted vendor resources are excluded.
 
 ## License
 
