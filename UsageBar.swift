@@ -18,6 +18,7 @@ struct UsageSnapshot {
     let plan: String?
     var credits: CreditsBalance? = nil
     var accountID: String? = nil
+    var resetTickets: ResetTicketSummary = .unavailable
     let fetched = Date()
     static func parse(_ result: [String: Any]) -> UsageSnapshot {
         var buckets = result["rateLimitsByLimitId"] as? [String: [String: Any]] ?? [:]
@@ -38,7 +39,8 @@ struct UsageSnapshot {
         }
         let codex = buckets["codex"] ?? (result["rateLimits"] as? [String: Any])
         let credits = (codex?["credits"] as? [String: Any]).map(CreditsBalance.init)
-        return UsageSnapshot(windows: windows, plan: plan, credits: credits, accountID: result["accountId"] as? String)
+        return UsageSnapshot(windows: windows, plan: plan, credits: credits, accountID: result["accountId"] as? String,
+                             resetTickets: .parse(result["rateLimitResetCredits"]))
     }
 }
 // The service does not report reset history. Record only changes observed between reads.
@@ -233,6 +235,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var samplingInterrupted = true
     var historyWindow: NSWindow?
     var historyChart: UsageChartView?
+    lazy var ticketReminders: TicketReminderService = {
+        let delivery = MacTicketNotificationDelivery()
+        delivery.onOpen = { [weak self] in self?.showGaugeMenu() }
+        return TicketReminderService(delivery: delivery)
+    }()
+    var ticketReminderDays: Set<Int> { TicketReminderPreferences.days() }
     var lastResetDetected: Date?
     var lastExtraNews: (date: Date, url: String)?
     var failure: String?
@@ -305,7 +313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var welcome: NSWindow?
     var summaryLabel: NSTextField?
     func writeState(_ phase: String) {
-        let state: [String: Any] = ["phase": phase, "pid": ProcessInfo.processInfo.processIdentifier, "iconVisible": item?.isVisible ?? false, "menuBarText": displayedText, "displayFields": selectedFields.map { $0.rawValue }, "displayIndex": displayIndex, "resetSource": nextReset.label, "extraEventID": nextReset.extra?.id ?? "", "iconWidth": item?.button?.frame.width ?? 0, "updated": Date().timeIntervalSince1970, "announcementMode": "direct", "announcementEnabled": announcementEnabled, "announcementMinutes": announcementMinutes, "rotationSeconds": rotationSeconds, "planName": planName, "logoLoaded": chatGPTLogo != nil, "canvasWidth": item?.button?.image?.size.width ?? 0, "renderedImageWidth": item?.button.map { $0.cell?.imageRect(forBounds: $0.bounds).width ?? 0 } ?? 0, "announcementChecks": announcementCache.records.map { ["source": $0.source, "error": $0.error ?? "", "events": $0.events.count] as [String: Any] }]
+        let state: [String: Any] = ["usageCheckedAt": snapshot?.fetched.timeIntervalSince1970 ?? 0, "announcementAttemptedAt": lastAnnouncementAttempt?.timeIntervalSince1970 ?? 0, "ticketReminderDays": ticketReminderDays.sorted(by: >), "ticketReminderStatus": ticketReminders.status, "ticketReminderCount": ticketReminders.scheduledCount, "phase": phase, "pid": ProcessInfo.processInfo.processIdentifier, "iconVisible": item?.isVisible ?? false, "menuBarText": displayedText, "displayFields": selectedFields.map { $0.rawValue }, "displayIndex": displayIndex, "resetSource": nextReset.label, "extraEventID": nextReset.extra?.id ?? "", "iconWidth": item?.button?.frame.width ?? 0, "updated": Date().timeIntervalSince1970, "announcementMode": "direct", "announcementEnabled": announcementEnabled, "announcementMinutes": announcementMinutes, "rotationSeconds": rotationSeconds, "planName": planName, "logoLoaded": chatGPTLogo != nil, "canvasWidth": item?.button?.image?.size.width ?? 0, "renderedImageWidth": item?.button.map { $0.cell?.imageRect(forBounds: $0.bounds).width ?? 0 } ?? 0, "announcementChecks": announcementCache.records.map { ["source": $0.source, "error": $0.error ?? "", "events": $0.events.count] as [String: Any] }]
         if let bytes = try? JSONSerialization.data(withJSONObject: state) {
             try? bytes.write(to: URL(fileURLWithPath: "/private/tmp/codex-usagebar-state.json"), options: .atomic)
         }
@@ -335,7 +343,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var launchURL: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/\(launchID).plist") }
 
     func applicationDidFinishLaunching(_ notification: Notification) { writeState("launched") }
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard let snapshot, failure == nil, Date().timeIntervalSince(snapshot.fetched) < 600 else { return }
+        ticketReminders.submit(summary: snapshot.resetTickets, account: snapshot.accountID, days: ticketReminderDays)
+    }
     func start() {
+        ticketReminders.didChange = { [weak self] in self?.rebuildMenu(); self?.writeState("ticket-reminders-updated") }
         usageEvents.record(.started)
         NSApp.setActivationPolicy(.accessory)
         // Apply the requested new default once on upgrade; later choices remain persistent.
@@ -398,6 +411,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         historyChart?.events = usageEvents.entries
         restartDisplayTimer(); refresh(); checkAnnouncementsNow()
     }
+    @objc func refreshAll() {
+        refresh()
+        startAnnouncementCheck(manual: true)
+    }
     @objc func refresh() {
         guard !fetching else { return }
         fetching = true
@@ -425,6 +442,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         self.lastExtraNews = (date, raw)
                     }
                     self.snapshot = value; self.failure = nil
+                    self.ticketReminders.submit(summary: value.resetTickets, account: value.accountID, days: self.ticketReminderDays)
                     let recordedAt = Date()
                     if self.usageHistory.record(value, now: recordedAt) {
                         if self.samplingInterrupted { self.usageEvents.record(.resumed, now: recordedAt) }
@@ -439,6 +457,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     let kind: UsageEvent.Kind = (error as? FetchError) == .timedOut ? .timeout : (error as? FetchError) == .unavailable ? .helperUnavailable : .refreshFailed
                     self.usageEvents.record(kind)
                     self.failure = (error as? FetchError) == .unavailable ? "Open the ChatGPT or Codex app to install its helper." : "Couldn’t refresh. Check your connection and ChatGPT sign-in."
+                    self.ticketReminders.submit(summary: .unavailable, account: nil, days: self.ticketReminderDays)
                 }
                 self.historyChart?.events = self.usageEvents.entries
                 self.updateTitle(); self.rebuildMenu()
@@ -492,58 +511,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func rebuildMenu() {
         readExtraFeed()
         guard let menu = item?.menu else { return }
-        menu.removeAllItems()
+        menu.removeAllItems(); menu.autoenablesItems = false
         add(planName + " ↗", action: #selector(openPlanPage))
-        menu.addItem(.separator())
+        let fullDate = DateFormatter(); fullDate.dateStyle = .medium; fullDate.timeStyle = .short
         if let data = snapshot {
-            if data.windows.isEmpty { add("No usage limits reported for this account") }
-            let formatter = DateFormatter(); formatter.dateStyle = .medium; formatter.timeStyle = .short
+            menu.items.last?.toolTip = "Updated \(fullDate.string(from: data.fetched)) · checks every 5 minutes"
+            if data.windows.isEmpty { add("No usage limits reported") }
             for (bucket, window) in data.windows {
-                add("\(bucket) · \(window.label): \(Int(window.used.rounded()))% used · \(window.remaining)% left")
-                if let reset = window.reset { add("Resets \(formatter.string(from: reset))") }
+                let label = bucket == "Codex" ? window.label : "\(bucket) · \(window.label)"
+                add("\(label) · \(window.remaining)% left")
+                var details = "\(Int(window.used.rounded()))% used"
+                if let reset = window.reset { details += "\nResets \(fullDate.string(from: reset))" }
+                details += "\nUpdated \(fullDate.string(from: data.fetched))"
+                menu.items.last?.toolTip = details
             }
-            add("Last reset detected: \(lastResetDetected.map { formatter.string(from: $0) } ?? "")")
-            add("Credits: \(data.credits?.text ?? "—")")
-            let clock = DateFormatter(); clock.timeStyle = .short
-            add("Updated \(clock.string(from: data.fetched)) · every 5 minutes")
-        } else if fetching { add("Reading your plan’s usage…") }
+        } else if fetching { add("Loading usage…") }
+        if let credits = snapshot?.credits?.text, credits != "—" { add("Credits · \(credits)") }
         if let reset = nextReset.date {
-            let formatter = DateFormatter(); formatter.dateStyle = .medium; formatter.timeStyle = .short
-            menu.addItem(.separator())
-            add("Next: \(nextReset.label)")
-            add("\(formatter.string(from: reset)) · \(nextReset.countdown())")
+            let date = DateFormatter(); date.dateFormat = "MMM d, h:mm a"
+            add("\(nextReset.extra == nil ? "Next reset" : "Extra reset") · \(date.string(from: reset))")
+            var details = "\(nextReset.label) · \(nextReset.countdown())\n\(fullDate.string(from: reset))"
+            if let lastResetDetected { details += "\nLast reset detected: \(fullDate.string(from: lastResetDetected))" }
+            menu.items.last?.toolTip = details
         }
-        if let failure { add(failure); if snapshot != nil { add("* Last known figures; refresh unavailable") } }
+        if let failure {
+            add(snapshot == nil ? "Couldn’t load usage" : "Refresh unavailable · showing last update")
+            menu.items.last?.toolTip = failure
+        }
+        addTicketSection(to: menu)
         menu.addItem(.separator())
-        add(fetching ? "Refreshing…" : "Refresh Now", action: fetching ? nil : #selector(refresh))
+        add(fetching || checkingAnnouncements ? "Refreshing…" : "Refresh Now", action: fetching || checkingAnnouncements ? nil : #selector(refreshAll))
         add("Usage History…", action: #selector(showUsageHistory))
         add("Open Usage Dashboard", action: #selector(dashboard))
         let upcoming = extraFeed?.next()
-        let news = upcoming?.sourceURL ?? lastExtraNews?.url
-        add(upcoming == nil && lastExtraNews != nil ? "Last Extra Reset News ↗" : "Next Extra Reset News ↗", action: news == nil ? nil : #selector(openExtraReset))
-        menu.items.last?.toolTip = news == nil ? "No extra reset announcement available" : "Open the extra reset announcement"
-        addAnnouncementMenu(to: menu)
+        if upcoming?.sourceURL != nil || lastExtraNews?.url != nil {
+            add(upcoming == nil ? "Last Reset News ↗" : "Upcoming Reset News ↗", action: #selector(openExtraReset))
+        }
         menu.addItem(.separator())
-        let displayRow = NSMenuItem(title: "Display Fields", action: nil, keyEquivalent: "")
-        let displayMenu = NSMenu()
-        displayMenu.autoenablesItems = false
+        let settingsRow = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
+        let settings = NSMenu(); settings.autoenablesItems = false
+        addTicketReminderMenu(to: settings)
+        addAnnouncementMenu(to: settings)
+        let displayRow = NSMenuItem(title: "Menu Bar Display", action: nil, keyEquivalent: "")
+        let displayMenu = NSMenu(); displayMenu.autoenablesItems = false
         for field in DisplayField.allCases {
             let row = NSMenuItem(title: field.label, action: #selector(toggleDisplayField(_:)), keyEquivalent: "")
             row.target = self; row.representedObject = field.rawValue
             row.state = selectedFields.contains(field) ? .on : .off
             displayMenu.addItem(row)
         }
-        displayRow.submenu = displayMenu; menu.addItem(displayRow)
+        displayRow.submenu = displayMenu; settings.addItem(displayRow)
         let rotationRow = NSMenuItem(title: "Rotation Speed", action: nil, keyEquivalent: "")
-        let rotationMenu = NSMenu()
+        let rotationMenu = NSMenu(); rotationMenu.autoenablesItems = false
         for seconds in [1, 2, 4, 6, 10, 15, 30] {
             let row = NSMenuItem(title: "Every \(seconds) \(seconds == 1 ? "second" : "seconds")", action: #selector(setRotationInterval(_:)), keyEquivalent: "")
             row.target = self; row.tag = seconds; row.state = rotationSeconds == seconds ? .on : .off
             rotationMenu.addItem(row)
         }
-        rotationRow.submenu = rotationMenu; menu.addItem(rotationRow)
-        add("Launch at Login", action: #selector(toggleLogin))
-        menu.items.last?.state = FileManager.default.fileExists(atPath: launchURL.path) ? .on : .off
+        rotationRow.submenu = rotationMenu; settings.addItem(rotationRow)
+        settings.addItem(.separator())
+        let login = NSMenuItem(title: "Launch at Login", action: #selector(toggleLogin), keyEquivalent: "")
+        login.target = self; login.state = FileManager.default.fileExists(atPath: launchURL.path) ? .on : .off
+        settings.addItem(login)
+        settingsRow.submenu = settings; menu.addItem(settingsRow)
         add("Quit CodexGauge", action: #selector(quit))
     }
     @objc func showUsageHistory() {
@@ -574,8 +604,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let timer = Timer(timeInterval: Double(announcementMinutes * 60), repeats: true) { [weak self] _ in self?.checkAnnouncementsNow() }
         RunLoop.main.add(timer, forMode: .common); announcementTimer = timer
     }
-    @objc func checkAnnouncementsNow() {
-        guard announcementEnabled, !checkingAnnouncements else { return }
+    @objc func checkAnnouncementsNow() { startAnnouncementCheck(manual: false) }
+    func startAnnouncementCheck(manual: Bool) {
+        guard announcementEnabled || manual, !checkingAnnouncements else { return }
         checkingAnnouncements = true; lastAnnouncementAttempt = Date()
         let sources = announcementSources, previous = announcementCache, plan = snapshot?.plan, generation = announcementGeneration
         rebuildMenu()
@@ -583,7 +614,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let result = checkAnnouncements(sources: sources, previous: previous, plan: plan)
             DispatchQueue.main.async {
                 self.checkingAnnouncements = false
-                guard generation == self.announcementGeneration, self.snapshot?.plan == plan else { self.checkAnnouncementsNow(); return }
+                guard generation == self.announcementGeneration, self.snapshot?.plan == plan else { self.startAnnouncementCheck(manual: manual); return }
                 self.archivePastExtraNews(); self.announcementCache = result; result.save()
                 self.updateTitle(); self.rebuildMenu(); self.writeState("announcements-checked")
             }
@@ -650,7 +681,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let f = DateFormatter(); f.dateStyle = .short; f.timeStyle = .short
             _ = row("Last successful check: \(f.string(from: checked))")
         }
-        let now = row("Check Now", #selector(checkAnnouncementsNow)); now.isEnabled = announcementEnabled && !checkingAnnouncements
         sub.addItem(.separator())
         for (minutes, label) in [(5, "Every 5 minutes"), (15, "Every 15 minutes"), (60, "Every hour"), (120, "Every 2 hours"), (360, "Every 6 hours"), (1440, "Daily")] {
             let item = row(label, #selector(setAnnouncementInterval(_:))); item.tag = minutes
@@ -690,6 +720,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func quit() { NSApp.terminate(nil) }
 }
 
+if CommandLine.arguments.contains("--test-plan-labels") {
+    do { try testPlanLabels(); exit(0) } catch { print(error); exit(1) }
+}
+if CommandLine.arguments.contains("--test-tickets") {
+    Task { await testResetTickets(); exit(0) }
+    dispatchMain()
+}
+if CommandLine.arguments.contains("--check-notifications") {
+    Task {
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        let pending = await center.pendingNotificationRequests()
+        let delivered = await center.deliveredNotifications()
+        print("Notification authorization: \(settings.authorizationStatus.rawValue)")
+        for request in pending where request.identifier.hasPrefix(TicketReminderPlan.prefix) {
+            print("Pending: \(request.content.title) · \((request.trigger as? UNCalendarNotificationTrigger)?.nextTriggerDate()?.description ?? "unknown date")")
+        }
+        print("Delivered test notifications: \(delivered.filter { $0.request.identifier == "codexgauge.notification-test" }.count)")
+        exit(0)
+    }
+    dispatchMain()
+}
 if CommandLine.arguments.contains("--test-announcements") {
     do { try testAnnouncements(); exit(0) } catch { print(error); exit(1) }
 }
@@ -828,8 +880,11 @@ if let index = CommandLine.arguments.firstIndex(of: "--preview-history"), Comman
 if CommandLine.arguments.contains("--check") {
     do {
         let snapshot = try fetchUsage()
-        print("Connected. Plan: \(snapshot.plan ?? "unavailable")")
+        print("Connected. Plan: \(snapshot.plan ?? "unavailable") · \(snapshot.plan.flatMap { UsagePlanLabels.name(for: $0) } ?? "label unavailable")")
         for (name, window) in snapshot.windows { print("\(name) \(window.label): \(Int(window.used))% used, \(window.remaining)% remaining") }
+        print(snapshot.resetTickets.summaryText)
+        print(snapshot.resetTickets.coverageText)
+        for ticket in snapshot.resetTickets.tickets { print("\(ticket.title): \(ticket.statusText(now: Date())) · \(ticket.expiryText(now: Date()))") }
         exit(snapshot.windows.isEmpty ? 2 : 0)
     } catch { print("Usage connection failed: \(error)"); exit(1) }
 }
@@ -839,4 +894,10 @@ app.delegate = delegate
 app.setActivationPolicy(.accessory)
 delegate.start()
 if CommandLine.arguments.contains("--history") { delegate.showUsageHistory() }
+if CommandLine.arguments.contains("--verify-live-menu") {
+    Task { @MainActor in
+        do { try await verifyLiveMenu(delegate); exit(0) }
+        catch { print("Live menu check failed: \(error)"); exit(1) }
+    }
+}
 withExtendedLifetime(delegate) { app.run() }
